@@ -2,16 +2,17 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'package:flutter/foundation.dart';
-import 'package:shared_preferences/shared_preferences.dart';
 import 'package:http/http.dart' as http;
 import '../models/server_model.dart';
 import '../models/deep_scan_model.dart';
+import '../database/database_helper.dart';
 
 class PingProvider extends ChangeNotifier {
   List<ServerModel> _servers = [];
   bool _isLoading = false;
   Timer? _monitoringTimer;
   final int _pingInterval = 5; // segundos
+  final DatabaseHelper _dbHelper = DatabaseHelper();
 
   List<ServerModel> get servers => _servers;
   bool get isLoading => _isLoading;
@@ -32,48 +33,13 @@ class PingProvider extends ChangeNotifier {
     notifyListeners();
 
     try {
-      final prefs = await SharedPreferences.getInstance();
+      // Cargar servidores desde la base de datos
+      _servers = await _dbHelper.getAllServers();
       
-      // Forzar recarga de servidores de ejemplo para esta demo
-      // Comentar esta línea después de la primera ejecución
-      await prefs.remove('servers');
-      
-      final serversJson = prefs.getStringList('servers') ?? [];
-      
-      if (serversJson.isEmpty) {
-        // Si no hay servidores guardados, agregar algunos ejemplos
-        _servers = [
-          ServerModel(
-            id: '1',
-            name: 'Google DNS',
-            ip: '8.8.8.8',
-            isMonitoring: true,
-          ),
-          ServerModel(
-            id: '2',
-            name: 'Cloudflare DNS',
-            ip: '1.1.1.1',
-            isMonitoring: true,
-          ),
-          ServerModel(
-            id: '3',
-            name: 'GitHub',
-            ip: 'github.com',
-            isMonitoring: true,
-          ),
-          ServerModel(
-            id: '4',
-            name: 'Stack Overflow',
-            ip: 'stackoverflow.com',
-            isMonitoring: true,
-          ),
-        ];
-        // Guardar los servidores de ejemplo
-        await _saveServers();
-      } else {
-        _servers = serversJson
-            .map((json) => ServerModel.fromJson(jsonDecode(json)))
-            .toList();
+      // Si no hay servidores, insertar ejemplos por defecto
+      if (_servers.isEmpty) {
+        await _dbHelper.insertDefaultServers();
+        _servers = await _dbHelper.getAllServers();
       }
     } catch (e) {
       print('Error loading servers: $e');
@@ -81,18 +47,6 @@ class PingProvider extends ChangeNotifier {
 
     _isLoading = false;
     notifyListeners();
-  }
-
-  Future<void> _saveServers() async {
-    try {
-      final prefs = await SharedPreferences.getInstance();
-      final serversJson = _servers
-          .map((server) => jsonEncode(server.toJson()))
-          .toList();
-      await prefs.setStringList('servers', serversJson);
-    } catch (e) {
-      print('Error saving servers: $e');
-    }
   }
 
   Future<void> addServer(String name, String ip) async {
@@ -104,8 +58,11 @@ class PingProvider extends ChangeNotifier {
       isMonitoring: true,
     );
 
+    // Guardar en la base de datos
+    await _dbHelper.insertServer(server);
+    
+    // Actualizar la lista local
     _servers.add(server);
-    await _saveServers();
     notifyListeners();
 
     // Hacer ping inmediatamente al nuevo servidor
@@ -113,8 +70,11 @@ class PingProvider extends ChangeNotifier {
   }
 
   Future<void> removeServer(String id) async {
+    // Eliminar de la base de datos
+    await _dbHelper.deleteServer(id);
+    
+    // Actualizar la lista local
     _servers.removeWhere((server) => server.id == id);
-    await _saveServers();
     notifyListeners();
   }
 
@@ -124,7 +84,9 @@ class PingProvider extends ChangeNotifier {
       _servers[index] = _servers[index].copyWith(
         isMonitoring: !_servers[index].isMonitoring,
       );
-      await _saveServers();
+      
+      // Actualizar en la base de datos
+      await _dbHelper.updateServer(_servers[index]);
       notifyListeners();
     }
   }
@@ -163,23 +125,24 @@ class PingProvider extends ChangeNotifier {
         errorMessage: errorMessage,
       );
 
+      // Guardar en la base de datos
+      await _dbHelper.insertPingHistory(server.id, historyEntry);
+
       final index = _servers.indexWhere((s) => s.id == server.id);
       if (index != -1) {
-        // Agregar nueva entrada al historial
-        final newHistory = List<PingHistoryEntry>.from(_servers[index].history);
-        newHistory.add(historyEntry);
-        
-        // Mantener solo los últimos 100 registros
-        if (newHistory.length > 100) {
-          newHistory.removeAt(0);
-        }
-        
+        // Actualizar servidor
         _servers[index] = _servers[index].copyWith(
           isOnline: isSuccess,
           responseTime: isSuccess ? stopwatch.elapsedMilliseconds : null,
           lastChecked: DateTime.now(),
-          history: newHistory,
         );
+        
+        // Actualizar en la base de datos
+        await _dbHelper.updateServer(_servers[index]);
+        
+        // Recargar el historial desde la base de datos
+        final updatedHistory = await _dbHelper.getPingHistory(server.id);
+        _servers[index] = _servers[index].copyWith(history: updatedHistory);
         
         print('Network test result for ${server.ip}: isOnline=$isSuccess, time=${stopwatch.elapsedMilliseconds}ms');
         
@@ -194,23 +157,24 @@ class PingProvider extends ChangeNotifier {
         errorMessage: e.toString(),
       );
 
+      // Guardar en la base de datos
+      await _dbHelper.insertPingHistory(server.id, historyEntry);
+
       final index = _servers.indexWhere((s) => s.id == server.id);
       if (index != -1) {
-        // Agregar nueva entrada al historial
-        final newHistory = List<PingHistoryEntry>.from(_servers[index].history);
-        newHistory.add(historyEntry);
-        
-        // Mantener solo los últimos 100 registros
-        if (newHistory.length > 100) {
-          newHistory.removeAt(0);
-        }
-        
         _servers[index] = _servers[index].copyWith(
           isOnline: false,
           responseTime: null,
           lastChecked: DateTime.now(),
-          history: newHistory,
         );
+        
+        // Actualizar en la base de datos
+        await _dbHelper.updateServer(_servers[index]);
+        
+        // Recargar el historial desde la base de datos
+        final updatedHistory = await _dbHelper.getPingHistory(server.id);
+        _servers[index] = _servers[index].copyWith(history: updatedHistory);
+        
         notifyListeners();
       }
       print('Error testing ${server.ip}: $e');
@@ -321,6 +285,26 @@ class PingProvider extends ChangeNotifier {
 
   Future<void> refreshAll() async {
     await _pingAllServers();
+  }
+
+  // Métodos adicionales para gestión de base de datos
+  Future<int> getServerCount() async {
+    return await _dbHelper.getServerCount();
+  }
+
+  Future<List<Map<String, dynamic>>> getServerStatistics() async {
+    return await _dbHelper.getServerStatistics();
+  }
+
+  Future<void> clearServerHistory(String serverId) async {
+    await _dbHelper.clearAllPingHistory(serverId);
+    // Recargar el servidor para actualizar el historial
+    final index = _servers.indexWhere((s) => s.id == serverId);
+    if (index != -1) {
+      final updatedHistory = await _dbHelper.getPingHistory(serverId);
+      _servers[index] = _servers[index].copyWith(history: updatedHistory);
+      notifyListeners();
+    }
   }
 
   // Métodos para escaneo profundo

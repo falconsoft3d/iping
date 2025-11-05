@@ -3,6 +3,7 @@ import 'package:provider/provider.dart';
 import '../providers/ping_provider.dart';
 import '../widgets/server_card.dart';
 import '../widgets/add_server_dialog.dart';
+import 'statistics_screen.dart';
 
 class MainScreen extends StatelessWidget {
   const MainScreen({super.key});
@@ -19,6 +20,17 @@ class MainScreen extends StatelessWidget {
           ],
         ),
         actions: [
+          IconButton(
+            onPressed: () {
+              Navigator.of(context).push(
+                MaterialPageRoute(
+                  builder: (context) => const StatisticsScreen(),
+                ),
+              );
+            },
+            icon: const Icon(Icons.bar_chart),
+            tooltip: 'Estadísticas',
+          ),
           Consumer<PingProvider>(
             builder: (context, provider, child) {
               return IconButton(

@@ -15,6 +15,8 @@ dependencies:
   shared_preferences: ^2.0.15
   provider: ^6.0.5
   intl: ^0.17.0
+  sqflite: ^2.2.8
+  path: ^1.8.2
 
 dev_dependencies:
   flutter_test:
